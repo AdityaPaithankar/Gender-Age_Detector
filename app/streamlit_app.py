@@ -28,6 +28,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_PATH = BASE_DIR / "models" / "final_model.keras"
 CASCADE_PATH = BASE_DIR / "assets" / "haarcascade_frontalface_default.xml"
 
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(
+        f"Model not found: {MODEL_PATH}"
+    )
+
+model = tf.keras.models.load_model(str(MODEL_PATH))
+
+print("Model loaded successfully!")
 IMG_SIZE = 128
 GENDER_THRESHOLD = 0.5
 
