@@ -1,15 +1,11 @@
-from pathlib import Path
 import os
-import threading
-
-import av
 import cv2
 import numpy as np
-import requests
 import streamlit as st
 import tensorflow as tf
 
-from streamlit_webrtc import webrtc_streamer
+from PIL import Image
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 
 # ============================================================
@@ -20,7 +16,7 @@ st.set_page_config(
     page_title="VisionAI",
     page_icon="👁️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
 
@@ -28,17 +24,18 @@ st.set_page_config(
 # PATHS
 # ============================================================
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# IMPORTANT:
-# Your GitHub repository contains "model", not "models"
-MODEL_PATH = BASE_DIR / "model" / "final_model.keras"
-
-CASCADE_PATH = (
-    BASE_DIR
-    / "assets"
-    / "haarcascade_frontalface_default.xml"
+MODEL_PATH = os.path.join(
+    BASE_DIR,
+    "model",
+    "final_model.keras"
 )
+
+
+# ============================================================
+# CONFIG
+# ============================================================
 
 IMG_SIZE = 128
 GENDER_THRESHOLD = 0.5
@@ -52,96 +49,58 @@ st.markdown(
     """
     <style>
 
-    .stApp {
-        background-color: #090d12;
-        color: #f5f7fa;
-    }
-
-    section[data-testid="stSidebar"] {
-        background-color: #10161d;
-        border-right: 1px solid #202933;
-    }
-
-    .brand {
-        font-size: 28px;
+    .main-title {
+        font-size: 48px;
         font-weight: 800;
-        margin-bottom: 5px;
+        margin-bottom: 0;
     }
 
     .subtitle {
-        color: #8d98a5;
-        font-size: 14px;
-        margin-bottom: 30px;
-    }
-
-    .hero {
-        padding: 10px 0 25px 0;
-    }
-
-    .hero h1 {
-        font-size: 42px;
-        font-weight: 800;
-        margin-bottom: 5px;
-    }
-
-    .hero p {
-        color: #8d98a5;
-        font-size: 16px;
+        color: #9ca3af;
+        font-size: 17px;
+        margin-top: 5px;
+        margin-bottom: 35px;
     }
 
     .card {
-        background: #11171e;
-        border: 1px solid #242d37;
+        background: #111827;
+        border: 1px solid #263244;
         border-radius: 14px;
-        padding: 20px;
-        margin-bottom: 15px;
+        padding: 24px;
+        margin-bottom: 20px;
     }
 
     .stat-title {
-        color: #7f8b99;
-        font-size: 12px;
+        color: #9ca3af;
+        font-size: 13px;
         text-transform: uppercase;
         letter-spacing: 1px;
     }
 
     .stat-value {
         font-size: 28px;
-        font-weight: 800;
+        font-weight: 700;
         margin-top: 8px;
     }
 
-    .online {
-        color: #42e878;
-        font-weight: 700;
+    .success {
+        color: #22c55e;
+        font-weight: 600;
     }
 
-    .offline {
-        color: #ff5c5c;
-        font-weight: 700;
+    .warning {
+        color: #f59e0b;
+        font-weight: 600;
     }
 
-    .section-title {
-        font-size: 25px;
-        font-weight: 750;
-        margin: 25px 0 15px 0;
-    }
-
-    .result {
-        background: #11171e;
-        border: 1px solid #242d37;
-        border-radius: 14px;
-        padding: 20px;
-        text-align: center;
-    }
-
-    .result-number {
+    .prediction {
         font-size: 30px;
-        font-weight: 800;
+        font-weight: 700;
     }
 
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 
@@ -152,115 +111,42 @@ st.markdown(
 @st.cache_resource
 def load_model():
 
-    if not MODEL_PATH.exists():
+    if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(
             f"Model not found: {MODEL_PATH}"
         )
 
-    return tf.keras.models.load_model(
-        str(MODEL_PATH)
-    )
+    return tf.keras.models.load_model(MODEL_PATH)
 
 
 # ============================================================
-# LOAD HAAR CASCADE
+# FACE DETECTOR
 # ============================================================
 
 @st.cache_resource
 def load_face_detector():
 
-    if not CASCADE_PATH.exists():
+    # Use OpenCV's bundled Haar Cascade.
+    # No custom assets folder required.
+
+    cascade_path = os.path.join(
+        cv2.data.haarcascades,
+        "haarcascade_frontalface_default.xml"
+    )
+
+    if not os.path.exists(cascade_path):
         raise FileNotFoundError(
-            f"Haar Cascade file not found: {CASCADE_PATH}"
+            f"Haar Cascade not found at: {cascade_path}"
         )
 
-    detector = cv2.CascadeClassifier(
-        str(CASCADE_PATH)
-    )
+    detector = cv2.CascadeClassifier(cascade_path)
 
     if detector.empty():
         raise RuntimeError(
-            "Failed to load Haar Cascade."
+            "OpenCV could not initialize Haar Cascade."
         )
 
     return detector
-
-
-# ============================================================
-# CLOUDFLARE TURN
-# ============================================================
-
-@st.cache_data(ttl=3600)
-def get_ice_servers():
-
-    try:
-
-        turn_key_id = st.secrets[
-            "cloudflare"
-        ]["turn_key_id"]
-
-        turn_api_token = st.secrets[
-            "cloudflare"
-        ]["turn_api_token"]
-
-    except Exception:
-
-        turn_key_id = os.getenv(
-            "CLOUDFLARE_TURN_KEY_ID"
-        )
-
-        turn_api_token = os.getenv(
-            "CLOUDFLARE_TURN_API_TOKEN"
-        )
-
-    if not turn_key_id or not turn_api_token:
-
-        return [
-            {
-                "urls": [
-                    "stun:stun.cloudflare.com:3478"
-                ]
-            }
-        ]
-
-    url = (
-        "https://rtc.live.cloudflare.com/v1/turn/keys/"
-        f"{turn_key_id}/credentials/generate-ice-servers"
-    )
-
-    headers = {
-        "Authorization": f"Bearer {turn_api_token}",
-        "Content-Type": "application/json",
-    }
-
-    response = requests.post(
-        url,
-        headers=headers,
-        json={
-            "ttl": 7200
-        },
-        timeout=10,
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    return data["iceServers"]
-
-
-# ============================================================
-# SHARED DETECTION STATE
-# ============================================================
-
-state_lock = threading.Lock()
-
-detection_state = {
-    "faces": 0,
-    "gender": "-",
-    "age": "-",
-    "confidence": 0.0,
-}
 
 
 # ============================================================
@@ -282,9 +168,7 @@ def predict_face(model, face):
     )
 
     # Normalize
-    face = face.astype(
-        np.float32
-    ) / 255.0
+    face = face.astype("float32") / 255.0
 
     # Batch dimension
     face = np.expand_dims(
@@ -292,114 +176,86 @@ def predict_face(model, face):
         axis=0
     )
 
-    # Prediction
+    # Model prediction
     prediction = model.predict(
         face,
         verbose=0
     )
 
-    # Your model outputs:
-    #
-    # prediction[0] -> gender
-    # prediction[1] -> age
-
-    gender_prediction = float(
+    gender_pred = float(
         prediction[0][0][0]
     )
 
-    age_prediction = float(
+    age_pred = float(
         prediction[1][0][0]
     )
 
-    # IMPORTANT:
-    #
-    # 0 = Female
-    # 1 = Male
-    #
-    # based on your training setup.
-
-    if gender_prediction >= GENDER_THRESHOLD:
-
+    # Gender
+    if gender_pred >= GENDER_THRESHOLD:
         gender = "Male"
-
     else:
-
         gender = "Female"
-
-    # Confidence
-    if gender_prediction >= 0.5:
-
-        confidence = gender_prediction
-
-    else:
-
-        confidence = 1.0 - gender_prediction
 
     # Age
     age = int(
-        round(age_prediction)
+        round(age_pred)
     )
 
-    age = max(
-        0,
-        min(
-            100,
-            age
-        )
+    # Confidence
+    gender_confidence = (
+        gender_pred
+        if gender_pred >= 0.5
+        else 1 - gender_pred
     )
 
     return (
         gender,
         age,
-        confidence
+        gender_confidence
     )
 
 
 # ============================================================
-# WEBRTC VIDEO CALLBACK
+# WEBRTC VIDEO PROCESSOR
 # ============================================================
 
-def video_frame_callback(frame):
+class VisionAIProcessor(VideoProcessorBase):
 
-    img = frame.to_ndarray(
-        format="bgr24"
-    )
+    def __init__(self):
 
-    try:
+        self.model = load_model()
+        self.detector = load_face_detector()
 
-        model = load_model()
+        self.face_count = 0
+        self.gender = "-"
+        self.age = "-"
+        self.confidence = 0.0
 
-        face_detector = load_face_detector()
+    def recv(self, frame):
 
-        # Convert to grayscale
+        img = frame.to_ndarray(
+            format="bgr24"
+        )
+
         gray = cv2.cvtColor(
             img,
             cv2.COLOR_BGR2GRAY
         )
 
-        # Detect faces
-        faces = face_detector.detectMultiScale(
+        faces = self.detector.detectMultiScale(
             gray,
             scaleFactor=1.1,
             minNeighbors=5,
             minSize=(60, 60)
         )
 
-        results = []
+        self.face_count = len(faces)
 
         for (x, y, w, h) in faces:
 
-            # ------------------------------------------------
-            # Face margin
-            # ------------------------------------------------
-
-            margin_x = int(
-                w * 0.15
-            )
-
-            margin_y = int(
-                h * 0.15
-            )
+            # Add small margin
+            margin_x = int(w * 0.10)
+            margin_y = int(h * 0.10)
 
             x1 = max(
                 0,
@@ -429,124 +285,145 @@ def video_frame_callback(frame):
             if face.size == 0:
                 continue
 
-            # ------------------------------------------------
-            # Prediction
-            # ------------------------------------------------
+            try:
 
-            gender, age, confidence = (
-                predict_face(
-                    model,
+                gender, age, confidence = predict_face(
+                    self.model,
                     face
                 )
-            )
 
-            results.append(
-                (
-                    gender,
-                    age,
-                    confidence
-                )
-            )
+                self.gender = gender
+                self.age = age
+                self.confidence = confidence
 
-            # ------------------------------------------------
-            # Draw face box
-            # ------------------------------------------------
-
-            cv2.rectangle(
-                img,
-                (x1, y1),
-                (x2, y2),
-                (0, 255, 120),
-                2
-            )
-
-            # ------------------------------------------------
-            # Label
-            # ------------------------------------------------
-
-            label = (
-                f"{gender} | Age: {age} | "
-                f"{confidence * 100:.0f}%"
-            )
-
-            label_y = max(
-                30,
-                y1 - 10
-            )
-
-            cv2.putText(
-                img,
-                label,
-                (x1, label_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 120),
-                2,
-                cv2.LINE_AA
-            )
-
-        # ----------------------------------------------------
-        # Update UI state
-        # ----------------------------------------------------
-
-        with state_lock:
-
-            detection_state["faces"] = len(
-                results
-            )
-
-            if results:
-
-                gender, age, confidence = (
-                    results[0]
+                label = (
+                    f"{gender} | Age: {age}"
                 )
 
-                detection_state[
-                    "gender"
-                ] = gender
+                confidence_label = (
+                    f"{confidence * 100:.1f}%"
+                )
 
-                detection_state[
-                    "age"
-                ] = age
+                # Face box
+                cv2.rectangle(
+                    img,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2
+                )
 
-                detection_state[
-                    "confidence"
-                ] = confidence
+                # Background for label
+                cv2.rectangle(
+                    img,
+                    (x1, max(0, y1 - 55)),
+                    (x2, y1),
+                    (0, 0, 0),
+                    -1
+                )
 
-            else:
+                # Prediction
+                cv2.putText(
+                    img,
+                    label,
+                    (x1 + 5, y1 - 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (0, 255, 0),
+                    2
+                )
 
-                detection_state[
-                    "gender"
-                ] = "-"
+                # Confidence
+                cv2.putText(
+                    img,
+                    confidence_label,
+                    (x1 + 5, y1 - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1
+                )
 
-                detection_state[
-                    "age"
-                ] = "-"
+            except Exception:
+                continue
 
-                detection_state[
-                    "confidence"
-                ] = 0.0
+        return frame.from_ndarray(
+            img,
+            format="bgr24"
+        )
 
-    except Exception:
 
-        # Don't stop WebRTC because of one bad frame
-        pass
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-    return av.VideoFrame.from_ndarray(
-        img,
-        format="bgr24"
+with st.sidebar:
+
+    st.markdown(
+        """
+        <h2>👁️ VisionAI</h2>
+        <p style="color:#9ca3af;">
+        AI-powered face intelligence
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.divider()
+
+    page = st.radio(
+        "Navigation",
+        [
+            "Live Analysis",
+            "Image Analysis",
+            "Model Information"
+        ]
+    )
+
+    st.divider()
+
+    st.markdown(
+        """
+        <p class="success">
+        ● SYSTEM ONLINE
+        </p>
+
+        <p style="color:#9ca3af;">
+        TensorFlow • OpenCV • CNN
+        </p>
+        """,
+        unsafe_allow_html=True
     )
 
 
 # ============================================================
-# INITIALIZE VISIONAI
+# HEADER
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">VisionAI</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
+    <div class="subtitle">
+    Real-time gender and age detection using a fine-tuned
+    multi-task convolutional neural network.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+
+# ============================================================
+# INITIALIZATION
 # ============================================================
 
 try:
 
     model = load_model()
-
-    face_detector = load_face_detector()
+    detector = load_face_detector()
 
     system_ready = True
 
@@ -560,364 +437,172 @@ except Exception as e:
 
 
 # ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown(
-        '<div class="brand">👁️ VisionAI</div>',
-        unsafe_allow_html=True
-    )
-
-    st.markdown(
-        '<div class="subtitle">'
-        'AI-powered face intelligence'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-    st.markdown("---")
-
-    page = st.radio(
-        "Navigation",
-        [
-            "Live Analysis",
-            "Image Analysis",
-            "Model Information",
-        ],
-        label_visibility="collapsed"
-    )
-
-    st.markdown("---")
-
-    if system_ready:
-
-        st.markdown(
-            '<p class="online">'
-            '● SYSTEM ONLINE'
-            '</p>',
-            unsafe_allow_html=True
-        )
-
-    else:
-
-        st.markdown(
-            '<p class="offline">'
-            '● SYSTEM ERROR'
-            '</p>',
-            unsafe_allow_html=True
-        )
-
-    st.caption(
-        "TensorFlow • OpenCV • WebRTC"
-    )
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.markdown(
-    """
-    <div class="hero">
-
-        <h1>VisionAI</h1>
-
-        <p>
-            Real-time gender and age detection
-            powered by a fine-tuned multi-task
-            convolutional neural network.
-        </p>
-
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
 # LIVE ANALYSIS
 # ============================================================
 
 if page == "Live Analysis":
 
-    st.markdown(
-        '<div class="section-title">'
-        'Live Analysis'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.header("Live Analysis")
 
-    # --------------------------------------------------------
-    # ICE SERVERS
-    # --------------------------------------------------------
+    if not system_ready:
 
-    try:
-
-        ice_servers = get_ice_servers()
-
-        network_status = "READY"
-
-    except Exception:
-
-        ice_servers = [
-            {
-                "urls": [
-                    "stun:stun.cloudflare.com:3478"
-                ]
-            }
-        ]
-
-        network_status = "STUN"
-
-
-    # --------------------------------------------------------
-    # SYSTEM CARDS
-    # --------------------------------------------------------
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-
-        st.markdown(
-            """
-            <div class="card">
-
-                <div class="stat-title">
-                    Model
-                </div>
-
-                <div class="stat-value">
-                    CNN
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
+        st.warning(
+            "VisionAI could not initialize. "
+            "Check the model and OpenCV installation."
         )
 
-    with col2:
+    else:
 
-        st.markdown(
-            """
-            <div class="card">
+        # ====================================================
+        # MODEL STATS
+        # ====================================================
 
-                <div class="stat-title">
-                    Input
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+
+            st.markdown(
+                """
+                <div class="card">
+                    <div class="stat-title">
+                        Model
+                    </div>
+
+                    <div class="stat-value">
+                        CNN
+                    </div>
                 </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-                <div class="stat-value">
-                    128×128
+        with col2:
+
+            st.markdown(
+                """
+                <div class="card">
+                    <div class="stat-title">
+                        Input
+                    </div>
+
+                    <div class="stat-value">
+                        128×128
+                    </div>
                 </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        with col3:
 
-    with col3:
+            st.markdown(
+                """
+                <div class="card">
+                    <div class="stat-title">
+                        Tasks
+                    </div>
 
-        st.markdown(
-            """
-            <div class="card">
-
-                <div class="stat-title">
-                    Tasks
+                    <div class="stat-value">
+                        2
+                    </div>
                 </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-                <div class="stat-value">
-                    2
+        with col4:
+
+            st.markdown(
+                """
+                <div class="card">
+                    <div class="stat-title">
+                        Network
+                    </div>
+
+                    <div class="stat-value">
+                        READY
+                    </div>
                 </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+        # ====================================================
+        # CAMERA
+        # ====================================================
 
-    with col4:
-
-        st.markdown(
-            f"""
-            <div class="card">
-
-                <div class="stat-title">
-                    Network
-                </div>
-
-                <div class="stat-value">
-                    {network_status}
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-
-    # --------------------------------------------------------
-    # CAMERA
-    # --------------------------------------------------------
-
-    camera_col, result_col = st.columns(
-        [2.3, 1]
-    )
-
-    with camera_col:
-
-        st.markdown(
-            '<div class="section-title">'
-            'Camera Feed'
-            '</div>',
-            unsafe_allow_html=True
-        )
+        st.subheader("Camera Feed")
 
         st.info(
-            "Click START and allow camera access."
+            "Allow camera access when your browser asks for permission."
         )
 
-        webrtc_streamer(
-            key="visionai-camera",
+        rtc_configuration = RTCConfiguration(
+            {
+                "iceServers": [
+                    {
+                        "urls": [
+                            "stun:stun.cloudflare.com:3478"
+                        ]
+                    }
+                ]
+            }
+        )
 
-            video_frame_callback=(
-                video_frame_callback
-            ),
-
+        ctx = webrtc_streamer(
+            key="visionai",
+            video_processor_factory=VisionAIProcessor,
+            rtc_configuration=rtc_configuration,
             media_stream_constraints={
                 "video": True,
-                "audio": False,
+                "audio": False
             },
-
-            rtc_configuration={
-                "iceServers": ice_servers
-            },
-
-            media_toggle_controls=True,
+            async_processing=True
         )
 
+        # ====================================================
+        # DETECTION INFO
+        # ====================================================
 
-    # --------------------------------------------------------
-    # LIVE RESULTS
-    # --------------------------------------------------------
+        if ctx.video_processor:
 
-    with result_col:
+            processor = ctx.video_processor
 
-        st.markdown(
-            '<div class="section-title">'
-            'Live Detection'
-            '</div>',
-            unsafe_allow_html=True
-        )
+            st.divider()
 
-        with state_lock:
+            st.subheader(
+                "Live Detection"
+            )
 
-            faces = detection_state[
-                "faces"
-            ]
+            c1, c2, c3, c4 = st.columns(4)
 
-            gender = detection_state[
-                "gender"
-            ]
+            with c1:
 
-            age = detection_state[
-                "age"
-            ]
+                st.metric(
+                    "Faces",
+                    processor.face_count
+                )
 
-            confidence = detection_state[
-                "confidence"
-            ]
+            with c2:
 
+                st.metric(
+                    "Gender",
+                    processor.gender
+                )
 
-        st.metric(
-            "Faces Detected",
-            faces
-        )
+            with c3:
 
-        st.metric(
-            "Gender",
-            gender
-        )
+                st.metric(
+                    "Age",
+                    processor.age
+                )
 
-        st.metric(
-            "Estimated Age",
-            age
-        )
+            with c4:
 
-        st.metric(
-            "Confidence",
-            f"{confidence * 100:.1f}%"
-        )
-
-
-    # --------------------------------------------------------
-    # OVERVIEW
-    # --------------------------------------------------------
-
-    st.markdown(
-        '<div class="section-title">'
-        'Detection Overview'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.markdown(
-            """
-            <div class="result">
-
-                <div class="stat-title">
-                    Gender
-                </div>
-
-                <div class="result-number">
-                    Binary
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col2:
-
-        st.markdown(
-            """
-            <div class="result">
-
-                <div class="stat-title">
-                    Age
-                </div>
-
-                <div class="result-number">
-                    Regression
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    with col3:
-
-        st.markdown(
-            """
-            <div class="result">
-
-                <div class="stat-title">
-                    Detector
-                </div>
-
-                <div class="result-number">
-                    Haar
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+                st.metric(
+                    "Confidence",
+                    f"{processor.confidence * 100:.1f}%"
+                )
 
 
 # ============================================================
@@ -926,143 +611,117 @@ if page == "Live Analysis":
 
 elif page == "Image Analysis":
 
-    st.markdown(
-        '<div class="section-title">'
-        'Image Analysis'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.header("Image Analysis")
 
     uploaded_file = st.file_uploader(
-        "Upload an image",
+        "Upload a face image",
         type=[
             "jpg",
             "jpeg",
-            "png",
-            "webp"
+            "png"
         ]
     )
 
     if uploaded_file:
 
-        file_bytes = np.asarray(
-            bytearray(
-                uploaded_file.read()
+        image = Image.open(
+            uploaded_file
+        ).convert("RGB")
+
+        image_np = np.array(image)
+
+        st.image(
+            image,
+            caption="Uploaded Image",
+            use_container_width=True
+        )
+
+        gray = cv2.cvtColor(
+            image_np,
+            cv2.COLOR_RGB2GRAY
+        )
+
+        faces = detector.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(60, 60)
+        )
+
+        result_image = cv2.cvtColor(
+            image_np,
+            cv2.COLOR_RGB2BGR
+        )
+
+        results = []
+
+        for (x, y, w, h) in faces:
+
+            face = result_image[
+                y:y+h,
+                x:x+w
+            ]
+
+            gender, age, confidence = predict_face(
+                model,
+                face
+            )
+
+            results.append(
+                {
+                    "gender": gender,
+                    "age": age,
+                    "confidence": confidence
+                }
+            )
+
+            cv2.rectangle(
+                result_image,
+                (x, y),
+                (x+w, y+h),
+                (0, 255, 0),
+                2
+            )
+
+            label = (
+                f"{gender} | Age: {age}"
+            )
+
+            cv2.putText(
+                result_image,
+                label,
+                (x, max(25, y - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2
+            )
+
+        st.subheader(
+            "Detection Result"
+        )
+
+        st.image(
+            cv2.cvtColor(
+                result_image,
+                cv2.COLOR_BGR2RGB
             ),
-            dtype=np.uint8
+            use_container_width=True
         )
 
-        image = cv2.imdecode(
-            file_bytes,
-            cv2.IMREAD_COLOR
+        st.write(
+            f"**Faces detected:** {len(results)}"
         )
 
-        if image is None:
+        for i, result in enumerate(results):
 
-            st.error(
-                "Could not read the image."
+            st.write(
+                f"**Face {i + 1}:** "
+                f"{result['gender']} | "
+                f"Age: {result['age']} | "
+                f"Confidence: "
+                f"{result['confidence'] * 100:.1f}%"
             )
-
-        else:
-
-            gray = cv2.cvtColor(
-                image,
-                cv2.COLOR_BGR2GRAY
-            )
-
-            faces = face_detector.detectMultiScale(
-                gray,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(60, 60)
-            )
-
-            output = image.copy()
-
-            results = []
-
-            for (x, y, w, h) in faces:
-
-                face = image[
-                    y:y+h,
-                    x:x+w
-                ]
-
-                if face.size == 0:
-                    continue
-
-                gender, age, confidence = (
-                    predict_face(
-                        model,
-                        face
-                    )
-                )
-
-                results.append(
-                    (
-                        gender,
-                        age,
-                        confidence
-                    )
-                )
-
-                cv2.rectangle(
-                    output,
-                    (x, y),
-                    (x+w, y+h),
-                    (0, 255, 120),
-                    2
-                )
-
-                label = (
-                    f"{gender} | Age: {age}"
-                )
-
-                cv2.putText(
-                    output,
-                    label,
-                    (
-                        x,
-                        max(
-                            30,
-                            y - 10
-                        )
-                    ),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 120),
-                    2,
-                    cv2.LINE_AA
-                )
-
-            st.image(
-                cv2.cvtColor(
-                    output,
-                    cv2.COLOR_BGR2RGB
-                ),
-                use_container_width=True
-            )
-
-            st.success(
-                f"Detected {len(results)} face(s)"
-            )
-
-            for i, (
-                gender,
-                age,
-                confidence
-            ) in enumerate(
-                results,
-                start=1
-            ):
-
-                st.write(
-                    f"**Face {i}:** "
-                    f"{gender}, "
-                    f"Age {age}, "
-                    f"Confidence "
-                    f"{confidence * 100:.1f}%"
-                )
 
 
 # ============================================================
@@ -1071,78 +730,44 @@ elif page == "Image Analysis":
 
 elif page == "Model Information":
 
-    st.markdown(
-        '<div class="section-title">'
-        'Model Information'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    st.header("Model Information")
 
     st.markdown(
         """
-        <div class="card">
+        ### VisionAI
 
-            <h2>VisionAI Multi-Task CNN</h2>
+        VisionAI uses a **multi-task CNN** to perform:
 
-            <p>
-            VisionAI uses a single neural network
-            to perform two tasks from the same
-            facial image.
-            </p>
+        - Gender classification
+        - Age prediction
+        - Face detection using OpenCV Haar Cascade
 
-            <hr>
+        ### Input
 
-            <h3>Input</h3>
+        `128 × 128 × 3`
 
-            <p>
-            128 × 128 × 3 RGB image
-            </p>
+        ### Outputs
 
-            <h3>Gender Detection</h3>
+        ```text
+        gender
+        age
+        ```
 
-            <p>
-            Binary classification using
-            Binary Crossentropy.
-            </p>
+        ### Preprocessing
 
-            <h3>Age Estimation</h3>
+        - Face detection
+        - Face cropping
+        - RGB conversion
+        - Resize to 128×128
+        - Pixel normalization to `[0, 1]`
 
-            <p>
-            Regression using Huber Loss.
-            </p>
+        ### Technology
 
-            <h3>Computer Vision Pipeline</h3>
-
-            <p>
-            Camera → Face Detection →
-            Face Crop → Resize → Normalize →
-            CNN → Gender + Age
-            </p>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown("### Model outputs")
-
-    st.code(
-        """
-gender → (None, 1)
-age    → (None, 1)
-        """,
-        language="text"
-    )
-
-    st.markdown("### Technology")
-
-    st.write(
-        """
-        • TensorFlow / Keras
-        • OpenCV
-        • Streamlit
-        • WebRTC
-        • Cloudflare TURN
-        • NumPy
+        - Python
+        - TensorFlow / Keras
+        - OpenCV
+        - Streamlit
+        - WebRTC
+        - NumPy
         """
     )
