@@ -346,14 +346,24 @@ if page == "Live Analysis":
         )
 
         ctx = webrtc_streamer(
-            key="visionai-camera",
-            video_processor_factory=VideoProcessor,
-            media_stream_constraints={
-                "video": True,
-                "audio": False
-            },
-            async_processing=True,
-        )
+    key="visionai-camera",
+    video_processor_factory=VideoProcessor,
+
+    media_stream_constraints={
+        "video": True,
+        "audio": False,
+    },
+
+    rtc_configuration={
+        "iceServers": [
+            {
+                "urls": ["stun:stun.l.google.com:19302"]
+            }
+        ]
+    },
+
+    async_processing=True,
+)
 
     with right:
 
