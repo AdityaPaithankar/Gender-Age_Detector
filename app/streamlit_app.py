@@ -2,12 +2,15 @@ import cv2
 import numpy as np
 import streamlit as st
 import tensorflow as tf
+
+from pathlib import Path
+from PIL import Image
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 import av
 
 
 # ============================================================
-# CONFIG
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -16,7 +19,20 @@ st.set_page_config(
     layout="wide",
 )
 
-MODEL_PATH = "model/final_model.keras"
+
+# ============================================================
+# PATHS / CONFIG
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+MODEL_PATH = BASE_DIR / "model" / "final_model.keras"
+CASCADE_PATH = (
+    BASE_DIR
+    / "assets"
+    / "haarcascade_frontalface_default.xml"
+)
+
 IMG_SIZE = 128
 THRESHOLD = 0.5
 
@@ -25,65 +41,68 @@ THRESHOLD = 0.5
 # CSS
 # ============================================================
 
-st.markdown("""
-<style>
+st.markdown(
+    """
+    <style>
 
-.stApp {
-    background: #090d12;
-}
+    .stApp {
+        background: #090d12;
+    }
 
-.block-container {
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-    max-width: 1500px;
-}
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        max-width: 1500px;
+    }
 
-.hero-title {
-    font-size: 42px;
-    font-weight: 800;
-    margin-bottom: 0;
-}
+    .hero-title {
+        font-size: 42px;
+        font-weight: 800;
+        margin-bottom: 0;
+    }
 
-.hero-subtitle {
-    color: #8b95a5;
-    font-size: 15px;
-    margin-top: 4px;
-}
+    .hero-subtitle {
+        color: #8b95a5;
+        font-size: 15px;
+        margin-top: 4px;
+    }
 
-.card {
-    background: #11161d;
-    border: 1px solid #252d37;
-    border-radius: 16px;
-    padding: 20px;
-}
+    .card {
+        background: #11161d;
+        border: 1px solid #252d37;
+        border-radius: 16px;
+        padding: 20px;
+    }
 
-.card-title {
-    color: #8b95a5;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
+    .card-title {
+        color: #8b95a5;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
 
-.card-value {
-    font-size: 30px;
-    font-weight: 750;
-    margin-top: 7px;
-}
+    .card-value {
+        font-size: 30px;
+        font-weight: 750;
+        margin-top: 7px;
+    }
 
-.online {
-    color: #62e58a;
-    font-weight: 600;
-}
+    .online {
+        color: #62e58a;
+        font-weight: 600;
+    }
 
-.section-title {
-    font-size: 22px;
-    font-weight: 700;
-    margin-top: 20px;
-    margin-bottom: 12px;
-}
+    .section-title {
+        font-size: 22px;
+        font-weight: 700;
+        margin-top: 20px;
+        margin-bottom: 12px;
+    }
 
-</style>
-""", unsafe_allow_html=True)
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -93,29 +112,56 @@ st.markdown("""
 @st.cache_resource
 def load_model():
 
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"Model file not found:\n{MODEL_PATH}"
+        )
+
     return tf.keras.models.load_model(
         MODEL_PATH
     )
 
 
+# ============================================================
+# FACE DETECTOR
+# ============================================================
+
 @st.cache_resource
 def load_face_detector():
 
+    if not CASCADE_PATH.exists():
+        raise FileNotFoundError(
+            f"Haar Cascade file not found:\n{CASCADE_PATH}"
+        )
+
     detector = cv2.CascadeClassifier(
-        cv2.data.haarcascades
-        + "haarcascade_frontalface_default.xml"
+        str(CASCADE_PATH)
     )
 
     if detector.empty():
         raise RuntimeError(
-            "Failed to load Haar Cascade."
+            f"Failed to load Haar Cascade:\n{CASCADE_PATH}"
         )
 
     return detector
 
 
-model = load_model()
-face_detector = load_face_detector()
+# ============================================================
+# LOAD RESOURCES
+# ============================================================
+
+try:
+
+    model = load_model()
+    face_detector = load_face_detector()
+
+except Exception as e:
+
+    st.error("Failed to initialize VisionAI.")
+
+    st.code(str(e))
+
+    st.stop()
 
 
 # ============================================================
@@ -124,25 +170,30 @@ face_detector = load_face_detector()
 
 def predict_face(face):
 
+    # BGR → RGB
     face = cv2.cvtColor(
         face,
         cv2.COLOR_BGR2RGB
     )
 
+    # Resize
     face = cv2.resize(
         face,
         (IMG_SIZE, IMG_SIZE)
     )
 
+    # Normalize
     face = face.astype(
         "float32"
     ) / 255.0
 
+    # Batch dimension
     face = np.expand_dims(
         face,
         axis=0
     )
 
+    # Model prediction
     gender_pred, age_pred = model.predict(
         face,
         verbose=0
@@ -159,21 +210,29 @@ def predict_face(face):
     )
 
     # IMPORTANT:
-    # Keep this mapping identical to
-    # your working webcam.py.
+    # Keep this mapping identical to your
+    # working webcam.py.
     gender = (
         "Female"
         if gender_score >= THRESHOLD
         else "Male"
     )
 
+    # Confidence
     confidence = (
         gender_score
         if gender == "Male"
         else 1 - gender_score
     )
 
-    return gender, age, confidence
+    # Keep age within a sensible range
+    age = max(0, min(age, 120))
+
+    return (
+        gender,
+        age,
+        confidence
+    )
 
 
 # ============================================================
@@ -191,15 +250,18 @@ class VideoProcessor(VideoProcessorBase):
 
     def recv(self, frame):
 
+        # WebRTC frame → OpenCV image
         img = frame.to_ndarray(
             format="bgr24"
         )
 
+        # BGR → grayscale
         gray = cv2.cvtColor(
             img,
             cv2.COLOR_BGR2GRAY
         )
 
+        # Face detection
         faces = face_detector.detectMultiScale(
             gray,
             scaleFactor=1.1,
@@ -209,11 +271,19 @@ class VideoProcessor(VideoProcessorBase):
 
         self.face_count = len(faces)
 
+        # If no face is detected
+        if len(faces) == 0:
+
+            self.gender = "-"
+            self.age = "-"
+            self.confidence = 0.0
+
+        # Process detected faces
         for (x, y, w, h) in faces:
 
             face = img[
-                y:y+h,
-                x:x+w
+                y:y + h,
+                x:x + w
             ]
 
             if face.size == 0:
@@ -227,40 +297,52 @@ class VideoProcessor(VideoProcessorBase):
             self.age = age
             self.confidence = confidence
 
-            # Bounding box
+            # ==================================================
+            # BOUNDING BOX
+            # ==================================================
 
             cv2.rectangle(
                 img,
                 (x, y),
-                (x+w, y+h),
+                (x + w, y + h),
                 (0, 255, 120),
                 2
             )
 
-            # Label background
+            # ==================================================
+            # LABEL
+            # ==================================================
 
             label = (
                 f"{gender} | Age: {age}"
             )
 
+            label_y = max(
+                35,
+                y
+            )
+
+            # Label background
             cv2.rectangle(
                 img,
-                (x, max(0, y-35)),
-                (x+w, y),
+                (x, label_y - 35),
+                (x + w, label_y),
                 (0, 255, 120),
                 -1
             )
 
+            # Label text
             cv2.putText(
                 img,
                 label,
-                (x+8, y-10),
+                (x + 8, label_y - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 0, 0),
                 2
             )
 
+        # OpenCV image → WebRTC frame
         return av.VideoFrame.from_ndarray(
             img,
             format="bgr24"
@@ -273,7 +355,9 @@ class VideoProcessor(VideoProcessorBase):
 
 with st.sidebar:
 
-    st.markdown("## 👁️ VisionAI")
+    st.markdown(
+        "## 👁️ VisionAI"
+    )
 
     st.caption(
         "AI-powered face intelligence"
@@ -338,6 +422,10 @@ if page == "Live Analysis":
         gap="large"
     )
 
+    # ========================================================
+    # CAMERA
+    # ========================================================
+
     with left:
 
         st.markdown(
@@ -346,30 +434,42 @@ if page == "Live Analysis":
         )
 
         ctx = webrtc_streamer(
-    key="visionai-camera",
-    video_processor_factory=VideoProcessor,
 
-    media_stream_constraints={
-        "video": True,
-        "audio": False,
-    },
+            key="visionai-camera",
 
-    rtc_configuration={
-        "iceServers": [
-            {
-                "urls": ["stun:stun.l.google.com:19302"]
-            }
-        ]
-    },
+            video_processor_factory=VideoProcessor,
 
-    async_processing=True,
-)
+            media_stream_constraints={
+                "video": True,
+                "audio": False,
+            },
+
+            # IMPORTANT FOR STREAMLIT CLOUD
+            rtc_configuration={
+                "iceServers": [
+                    {
+                        "urls": [
+                            "stun:stun.l.google.com:19302"
+                        ]
+                    }
+                ]
+            },
+
+            async_processing=True,
+        )
+
+
+    # ========================================================
+    # LIVE DETECTION
+    # ========================================================
 
     with right:
 
         st.markdown(
             '<div class="card">'
-            '<div class="card-title">LIVE DETECTION</div>'
+            '<div class="card-title">'
+            'LIVE DETECTION'
+            '</div>'
             '<br>'
             '<b>Face Detection</b>'
             '<br><br>'
@@ -385,6 +485,7 @@ if page == "Live Analysis":
 
             processor = ctx.video_processor
 
+            # Face + Gender
             c1, c2 = st.columns(2)
 
             with c1:
@@ -401,6 +502,7 @@ if page == "Live Analysis":
                     processor.gender
                 )
 
+            # Age + Confidence
             c3, c4 = st.columns(2)
 
             with c3:
@@ -416,6 +518,11 @@ if page == "Live Analysis":
                     "Confidence",
                     f"{processor.confidence * 100:.1f}%"
                 )
+
+
+    # ========================================================
+    # DETECTION OVERVIEW
+    # ========================================================
 
     st.divider()
 
@@ -433,8 +540,12 @@ if page == "Live Analysis":
         st.markdown(
             """
             <div class="card">
-                <div class="card-title">MODEL</div>
-                <div class="card-value">CNN</div>
+                <div class="card-title">
+                    MODEL
+                </div>
+                <div class="card-value">
+                    CNN
+                </div>
             </div>
             """,
             unsafe_allow_html=True
@@ -445,8 +556,12 @@ if page == "Live Analysis":
         st.markdown(
             """
             <div class="card">
-                <div class="card-title">INPUT</div>
-                <div class="card-value">128×128</div>
+                <div class="card-title">
+                    INPUT
+                </div>
+                <div class="card-value">
+                    128×128
+                </div>
             </div>
             """,
             unsafe_allow_html=True
@@ -457,8 +572,12 @@ if page == "Live Analysis":
         st.markdown(
             """
             <div class="card">
-                <div class="card-title">TASKS</div>
-                <div class="card-value">2</div>
+                <div class="card-title">
+                    TASKS
+                </div>
+                <div class="card-value">
+                    2
+                </div>
             </div>
             """,
             unsafe_allow_html=True
@@ -469,8 +588,12 @@ if page == "Live Analysis":
         st.markdown(
             """
             <div class="card">
-                <div class="card-title">STATUS</div>
-                <div class="card-value">READY</div>
+                <div class="card-title">
+                    STATUS
+                </div>
+                <div class="card-value">
+                    READY
+                </div>
             </div>
             """,
             unsafe_allow_html=True
@@ -501,63 +624,79 @@ elif page == "Image Analysis":
 
     if uploaded:
 
+        # Load image
         image = np.array(
-            __import__("PIL").Image.open(
+            Image.open(
                 uploaded
             ).convert("RGB")
         )
 
+        # RGB → BGR
         frame = cv2.cvtColor(
             image,
             cv2.COLOR_RGB2BGR
         )
 
+        # Grayscale
         gray = cv2.cvtColor(
             frame,
             cv2.COLOR_BGR2GRAY
         )
 
+        # Face detection
         faces = face_detector.detectMultiScale(
             gray,
-            1.1,
-            5,
+            scaleFactor=1.1,
+            minNeighbors=5,
             minSize=(60, 60)
         )
 
+        # Process faces
         for x, y, w, h in faces:
 
             face = frame[
-                y:y+h,
-                x:x+w
+                y:y + h,
+                x:x + w
             ]
+
+            if face.size == 0:
+                continue
 
             gender, age, confidence = predict_face(
                 face
             )
 
+            # Bounding box
             cv2.rectangle(
                 frame,
                 (x, y),
-                (x+w, y+h),
+                (x + w, y + h),
                 (0, 255, 120),
                 2
             )
 
+            # Label
+            label = (
+                f"{gender} | Age: {age}"
+            )
+
             cv2.putText(
                 frame,
-                f"{gender} | Age: {age}",
-                (x, max(25, y-10)),
+                label,
+                (x, max(25, y - 10)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
                 (0, 255, 120),
                 2
             )
 
+        # BGR → RGB
         result = cv2.cvtColor(
             frame,
             cv2.COLOR_BGR2RGB
         )
 
+        # Display
         st.image(
             result,
             use_container_width=True
@@ -584,18 +723,21 @@ elif page == "Model Information":
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         st.metric(
             "Input Size",
             "128 × 128 × 3"
         )
 
     with c2:
+
         st.metric(
             "Outputs",
             "2"
         )
 
     with c3:
+
         st.metric(
             "Framework",
             "TensorFlow"
@@ -603,7 +745,9 @@ elif page == "Model Information":
 
     st.divider()
 
-    st.markdown("### Architecture")
+    st.markdown(
+        "### Architecture"
+    )
 
     st.write(
         """
@@ -614,7 +758,9 @@ elif page == "Model Information":
         """
     )
 
-    st.markdown("### Tasks")
+    st.markdown(
+        "### Tasks"
+    )
 
     col1, col2 = st.columns(2)
 
