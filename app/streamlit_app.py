@@ -128,22 +128,51 @@ def load_model():
 
 @st.cache_resource
 def load_face_detector():
+    """
+    Load Haar Cascade from OpenCV's installed data directory.
+    Falls back to the project's assets directory if available.
+    """
 
-    if not CASCADE_PATH.exists():
-        raise FileNotFoundError(
-            f"Haar Cascade file not found:\n{CASCADE_PATH}"
+    cascade_name = "haarcascade_frontalface_default.xml"
+
+    # 1. OpenCV bundled cascade
+    try:
+        opencv_path = os.path.join(
+            cv2.data.haarcascades,
+            cascade_name
         )
 
-    detector = cv2.CascadeClassifier(
-        str(CASCADE_PATH)
+        if os.path.exists(opencv_path):
+            detector = cv2.CascadeClassifier(opencv_path)
+
+            if not detector.empty():
+                print(f"Haar Cascade loaded from OpenCV: {opencv_path}")
+                return detector
+
+    except Exception as e:
+        print(f"OpenCV cascade lookup failed: {e}")
+
+    # 2. Project assets fallback
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    assets_path = os.path.join(
+        base_dir,
+        "assets",
+        cascade_name
     )
 
-    if detector.empty():
-        raise RuntimeError(
-            f"Failed to load Haar Cascade:\n{CASCADE_PATH}"
-        )
+    if os.path.exists(assets_path):
+        detector = cv2.CascadeClassifier(assets_path)
 
-    return detector
+        if not detector.empty():
+            print(f"Haar Cascade loaded from assets: {assets_path}")
+            return detector
+
+    raise RuntimeError(
+        "Could not load Haar Cascade. "
+        "Install opencv-python-headless correctly or add "
+        "haarcascade_frontalface_default.xml to assets/."
+    )
 
 
 # ============================================================
