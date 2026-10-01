@@ -11,7 +11,29 @@ import tensorflow as tf
 
 from streamlit_webrtc import webrtc_streamer
 
+from pathlib import Path
+import streamlit as st
 
+# Current working directory
+st.write("CWD:", Path.cwd())
+
+# Location of this Python file
+st.write("FILE:", Path(__file__).resolve())
+
+# Repository root
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+st.write("BASE_DIR:", BASE_DIR)
+st.write("ROOT CONTENTS:", [p.name for p in BASE_DIR.iterdir()])
+
+MODEL_PATH = BASE_DIR / "models" / "final_model.keras"
+
+st.write("MODEL PATH:", MODEL_PATH)
+st.write("MODEL EXISTS:", MODEL_PATH.exists())
+
+if not MODEL_PATH.exists():
+    st.error("final_model.keras is NOT at the expected location.")
+    st.stop()
 # ============================================================
 # CONFIG
 # ============================================================
