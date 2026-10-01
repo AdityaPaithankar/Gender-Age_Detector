@@ -5,7 +5,7 @@ import tensorflow as tf
 import os
 from pathlib import Path
 from PIL import Image
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import av
 
 
@@ -463,29 +463,9 @@ if page == "Live Analysis":
         )
 
         ctx = webrtc_streamer(
-
-            key="visionai-camera",
-
-            video_processor_factory=VideoProcessor,
-
-            media_stream_constraints={
-                "video": True,
-                "audio": False,
-            },
-
-            # IMPORTANT FOR STREAMLIT CLOUD
-            rtc_configuration={
-                "iceServers": [
-                    {
-                        "urls": [
-                            "stun:stun.l.google.com:19302"
-                        ]
-                    }
-                ]
-            },
-
-            async_processing=True,
-        )
+    key="visionai",
+    mode=WebRtcMode.SENDRECV,
+)
 
 
     # ========================================================
