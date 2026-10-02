@@ -105,6 +105,22 @@ st.markdown(
 
 
 # ============================================================
+# UI HELPERS
+# ============================================================
+
+def stat_card(title, value):
+    # IMPORTANT: no blank lines and no deep indentation inside the HTML,
+    # otherwise Markdown renders parts of it as a code block.
+    st.markdown(
+        f'<div class="card">'
+        f'<div class="stat-title">{title}</div>'
+        f'<div class="stat-value">{value}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
 # LOAD MODEL
 # ============================================================
 
@@ -156,39 +172,22 @@ def load_face_detector():
 def predict_face(model, face):
 
     # BGR -> RGB
-    face = cv2.cvtColor(
-        face,
-        cv2.COLOR_BGR2RGB
-    )
+    face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
 
     # Resize
-    face = cv2.resize(
-        face,
-        (IMG_SIZE, IMG_SIZE)
-    )
+    face = cv2.resize(face, (IMG_SIZE, IMG_SIZE))
 
     # Normalize
     face = face.astype("float32") / 255.0
 
     # Batch dimension
-    face = np.expand_dims(
-        face,
-        axis=0
-    )
+    face = np.expand_dims(face, axis=0)
 
     # Model prediction
-    prediction = model.predict(
-        face,
-        verbose=0
-    )
+    prediction = model.predict(face, verbose=0)
 
-    gender_pred = float(
-        prediction[0][0][0]
-    )
-
-    age_pred = float(
-        prediction[1][0][0]
-    )
+    gender_pred = float(prediction[0][0][0])
+    age_pred = float(prediction[1][0][0])
 
     # Gender
     if gender_pred >= GENDER_THRESHOLD:
@@ -197,9 +196,7 @@ def predict_face(model, face):
         gender = "Male"
 
     # Age
-    age = int(
-        round(age_pred)
-    )
+    age = int(round(age_pred))
 
     # Confidence
     gender_confidence = (
@@ -208,11 +205,7 @@ def predict_face(model, face):
         else 1 - gender_pred
     )
 
-    return (
-        gender,
-        age,
-        gender_confidence
-    )
+    return gender, age, gender_confidence
 
 
 # ============================================================
@@ -233,14 +226,9 @@ class VisionAIProcessor(VideoProcessorBase):
 
     def recv(self, frame):
 
-        img = frame.to_ndarray(
-            format="bgr24"
-        )
+        img = frame.to_ndarray(format="bgr24")
 
-        gray = cv2.cvtColor(
-            img,
-            cv2.COLOR_BGR2GRAY
-        )
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         faces = self.detector.detectMultiScale(
             gray,
@@ -257,30 +245,12 @@ class VisionAIProcessor(VideoProcessorBase):
             margin_x = int(w * 0.10)
             margin_y = int(h * 0.10)
 
-            x1 = max(
-                0,
-                x - margin_x
-            )
+            x1 = max(0, x - margin_x)
+            y1 = max(0, y - margin_y)
+            x2 = min(img.shape[1], x + w + margin_x)
+            y2 = min(img.shape[0], y + h + margin_y)
 
-            y1 = max(
-                0,
-                y - margin_y
-            )
-
-            x2 = min(
-                img.shape[1],
-                x + w + margin_x
-            )
-
-            y2 = min(
-                img.shape[0],
-                y + h + margin_y
-            )
-
-            face = img[
-                y1:y2,
-                x1:x2
-            ]
+            face = img[y1:y2, x1:x2]
 
             if face.size == 0:
                 continue
@@ -296,13 +266,8 @@ class VisionAIProcessor(VideoProcessorBase):
                 self.age = age
                 self.confidence = confidence
 
-                label = (
-                    f"{gender} | Age: {age}"
-                )
-
-                confidence_label = (
-                    f"{confidence * 100:.1f}%"
-                )
+                label = f"{gender} | Age: {age}"
+                confidence_label = f"{confidence * 100:.1f}%"
 
                 # Face box
                 cv2.rectangle(
@@ -347,10 +312,7 @@ class VisionAIProcessor(VideoProcessorBase):
             except Exception:
                 continue
 
-        return frame.from_ndarray(
-            img,
-            format="bgr24"
-        )
+        return frame.from_ndarray(img, format="bgr24")
 
 
 # ============================================================
@@ -360,12 +322,8 @@ class VisionAIProcessor(VideoProcessorBase):
 with st.sidebar:
 
     st.markdown(
-        """
-        <h2>👁️ VisionAI</h2>
-        <p style="color:#9ca3af;">
-        AI-powered face intelligence
-        </p>
-        """,
+        '<h2>👁️ VisionAI</h2>'
+        '<p style="color:#9ca3af;">AI-powered face intelligence</p>',
         unsafe_allow_html=True
     )
 
@@ -383,15 +341,8 @@ with st.sidebar:
     st.divider()
 
     st.markdown(
-        """
-        <p class="success">
-        ● SYSTEM ONLINE
-        </p>
-
-        <p style="color:#9ca3af;">
-        TensorFlow • OpenCV • CNN
-        </p>
-        """,
+        '<p class="success">● SYSTEM ONLINE</p>'
+        '<p style="color:#9ca3af;">TensorFlow • OpenCV • CNN</p>',
         unsafe_allow_html=True
     )
 
@@ -406,12 +357,10 @@ st.markdown(
 )
 
 st.markdown(
-    """
-    <div class="subtitle">
-    Real-time gender and age detection using a fine-tuned
-    multi-task convolutional neural network.
-    </div>
-    """,
+    '<div class="subtitle">'
+    'Real-time gender and age detection using a fine-tuned '
+    'multi-task convolutional neural network.'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -431,9 +380,7 @@ except Exception as e:
 
     system_ready = False
 
-    st.error(
-        f"VisionAI initialization failed: {e}"
-    )
+    st.error(f"VisionAI initialization failed: {e}")
 
 
 # ============================================================
@@ -460,72 +407,16 @@ if page == "Live Analysis":
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-
-            st.markdown(
-                """
-                <div class="card">
-                    <div class="stat-title">
-                        Model
-                    </div>
-
-                    <div class="stat-value">
-                        CNN
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            stat_card("Model", "CNN")
 
         with col2:
-
-            st.markdown(
-                """
-                <div class="card">
-                    <div class="stat-title">
-                        Input
-                    </div>
-
-                    <div class="stat-value">
-                        128×128
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            stat_card("Input", "128×128")
 
         with col3:
-
-            st.markdown(
-                """
-                <div class="card">
-                    <div class="stat-title">
-                        Tasks
-                    </div>
-
-                    <div class="stat-value">
-                        2
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            stat_card("Tasks", "2")
 
         with col4:
-
-            st.markdown(
-                """
-                <div class="card">
-                    <div class="stat-title">
-                        Network
-                    </div>
-
-                    <div class="stat-value">
-                        READY
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            stat_card("Network", "READY")
 
         # ====================================================
         # CAMERA
@@ -570,35 +461,20 @@ if page == "Live Analysis":
 
             st.divider()
 
-            st.subheader(
-                "Live Detection"
-            )
+            st.subheader("Live Detection")
 
             c1, c2, c3, c4 = st.columns(4)
 
             with c1:
-
-                st.metric(
-                    "Faces",
-                    processor.face_count
-                )
+                st.metric("Faces", processor.face_count)
 
             with c2:
-
-                st.metric(
-                    "Gender",
-                    processor.gender
-                )
+                st.metric("Gender", processor.gender)
 
             with c3:
-
-                st.metric(
-                    "Age",
-                    processor.age
-                )
+                st.metric("Age", processor.age)
 
             with c4:
-
                 st.metric(
                     "Confidence",
                     f"{processor.confidence * 100:.1f}%"
@@ -613,115 +489,97 @@ elif page == "Image Analysis":
 
     st.header("Image Analysis")
 
-    uploaded_file = st.file_uploader(
-        "Upload a face image",
-        type=[
-            "jpg",
-            "jpeg",
-            "png"
-        ]
-    )
+    if not system_ready:
 
-    if uploaded_file:
-
-        image = Image.open(
-            uploaded_file
-        ).convert("RGB")
-
-        image_np = np.array(image)
-
-        st.image(
-            image,
-            caption="Uploaded Image",
-            use_container_width=True
+        st.warning(
+            "VisionAI could not initialize. "
+            "Check the model and OpenCV installation."
         )
 
-        gray = cv2.cvtColor(
-            image_np,
-            cv2.COLOR_RGB2GRAY
+    else:
+
+        uploaded_file = st.file_uploader(
+            "Upload a face image",
+            type=["jpg", "jpeg", "png"]
         )
 
-        faces = detector.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(60, 60)
-        )
+        if uploaded_file:
 
-        result_image = cv2.cvtColor(
-            image_np,
-            cv2.COLOR_RGB2BGR
-        )
+            image = Image.open(uploaded_file).convert("RGB")
 
-        results = []
+            image_np = np.array(image)
 
-        for (x, y, w, h) in faces:
-
-            face = result_image[
-                y:y+h,
-                x:x+w
-            ]
-
-            gender, age, confidence = predict_face(
-                model,
-                face
+            st.image(
+                image,
+                caption="Uploaded Image",
+                use_container_width=True
             )
 
-            results.append(
-                {
-                    "gender": gender,
-                    "age": age,
-                    "confidence": confidence
-                }
+            gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
+
+            faces = detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(60, 60)
             )
 
-            cv2.rectangle(
-                result_image,
-                (x, y),
-                (x+w, y+h),
-                (0, 255, 0),
-                2
+            result_image = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+            results = []
+
+            for (x, y, w, h) in faces:
+
+                face = result_image[y:y + h, x:x + w]
+
+                gender, age, confidence = predict_face(model, face)
+
+                results.append(
+                    {
+                        "gender": gender,
+                        "age": age,
+                        "confidence": confidence
+                    }
+                )
+
+                cv2.rectangle(
+                    result_image,
+                    (x, y),
+                    (x + w, y + h),
+                    (0, 255, 0),
+                    2
+                )
+
+                label = f"{gender} | Age: {age}"
+
+                cv2.putText(
+                    result_image,
+                    label,
+                    (x, max(25, y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 0),
+                    2
+                )
+
+            st.subheader("Detection Result")
+
+            st.image(
+                cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB),
+                use_container_width=True
             )
 
-            label = (
-                f"{gender} | Age: {age}"
-            )
+            st.write(f"**Faces detected:** {len(results)}")
 
-            cv2.putText(
-                result_image,
-                label,
-                (x, max(25, y - 10)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
+            for i, result in enumerate(results):
 
-        st.subheader(
-            "Detection Result"
-        )
-
-        st.image(
-            cv2.cvtColor(
-                result_image,
-                cv2.COLOR_BGR2RGB
-            ),
-            use_container_width=True
-        )
-
-        st.write(
-            f"**Faces detected:** {len(results)}"
-        )
-
-        for i, result in enumerate(results):
-
-            st.write(
-                f"**Face {i + 1}:** "
-                f"{result['gender']} | "
-                f"Age: {result['age']} | "
-                f"Confidence: "
-                f"{result['confidence'] * 100:.1f}%"
-            )
+                st.write(
+                    f"**Face {i + 1}:** "
+                    f"{result['gender']} | "
+                    f"Age: {result['age']} | "
+                    f"Confidence: "
+                    f"{result['confidence'] * 100:.1f}%"
+                )
 
 
 # ============================================================
