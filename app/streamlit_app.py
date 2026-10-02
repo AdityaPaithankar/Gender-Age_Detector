@@ -1,4 +1,6 @@
 import os
+import time
+import threading
 import cv2
 import numpy as np
 import streamlit as st
@@ -211,6 +213,18 @@ def predict_face(model, face):
 # ============================================================
 # WEBRTC VIDEO PROCESSOR
 # ============================================================
+#
+# Speed strategy:
+#   1. recv() only draws cached results, so video never waits on the model.
+#   2. A background thread runs detection + prediction on the latest frame
+#      (older frames are dropped instead of queued).
+#   3. Face detection runs on a downscaled frame.
+#   4. All faces are classified in a single batched model call, capped
+#      at MAX_FACES (largest first).
+
+DETECT_WIDTH = 320
+MAX_FACES = 3
+
 
 class VisionAIProcessor(VideoProcessorBase):
 
@@ -224,93 +238,190 @@ class VisionAIProcessor(VideoProcessorBase):
         self.age = "-"
         self.confidence = 0.0
 
-    def recv(self, frame):
+        self._lock = threading.Lock()
+        self._latest_frame = None
+        self._results = []
+        self._running = True
 
-        img = frame.to_ndarray(format="bgr24")
+        self._thread = threading.Thread(
+            target=self._worker,
+            daemon=True
+        )
+        self._thread.start()
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    def on_ended(self):
+        self._running = False
+
+    # --------------------------------------------------------
+    # Background inference
+    # --------------------------------------------------------
+
+    def _worker(self):
+
+        while self._running:
+
+            with self._lock:
+                img = self._latest_frame
+                self._latest_frame = None
+
+            if img is None:
+                time.sleep(0.01)
+                continue
+
+            try:
+                self._process(img)
+            except Exception:
+                continue
+
+    def _process(self, img):
+
+        h_img, w_img = img.shape[:2]
+
+        # Detect on a smaller frame
+        scale = min(1.0, DETECT_WIDTH / w_img)
+
+        small = cv2.resize(
+            img,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_AREA
+        )
+
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
         faces = self.detector.detectMultiScale(
             gray,
-            scaleFactor=1.1,
+            scaleFactor=1.2,
             minNeighbors=5,
-            minSize=(60, 60)
+            minSize=(int(60 * scale), int(60 * scale))
         )
 
-        self.face_count = len(faces)
+        if len(faces) == 0:
+            with self._lock:
+                self._results = []
+                self.face_count = 0
+            return
+
+        # Largest faces first
+        faces = sorted(
+            faces,
+            key=lambda f: f[2] * f[3],
+            reverse=True
+        )[:MAX_FACES]
+
+        boxes = []
+        batch = []
 
         for (x, y, w, h) in faces:
 
-            # Add small margin
+            # Map back to full-resolution coordinates
+            x, y, w, h = [int(v / scale) for v in (x, y, w, h)]
+
             margin_x = int(w * 0.10)
             margin_y = int(h * 0.10)
 
             x1 = max(0, x - margin_x)
             y1 = max(0, y - margin_y)
-            x2 = min(img.shape[1], x + w + margin_x)
-            y2 = min(img.shape[0], y + h + margin_y)
+            x2 = min(w_img, x + w + margin_x)
+            y2 = min(h_img, y + h + margin_y)
 
             face = img[y1:y2, x1:x2]
 
             if face.size == 0:
                 continue
 
-            try:
+            face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+            face = cv2.resize(face, (IMG_SIZE, IMG_SIZE))
+            face = face.astype("float32") / 255.0
 
-                gender, age, confidence = predict_face(
-                    self.model,
-                    face
-                )
+            batch.append(face)
+            boxes.append((x1, y1, x2, y2))
 
-                self.gender = gender
-                self.age = age
-                self.confidence = confidence
+        if not batch:
+            return
 
-                label = f"{gender} | Age: {age}"
-                confidence_label = f"{confidence * 100:.1f}%"
+        # One batched call for all faces
+        outputs = self.model(
+            np.stack(batch),
+            training=False
+        )
 
-                # Face box
-                cv2.rectangle(
-                    img,
-                    (x1, y1),
-                    (x2, y2),
-                    (0, 255, 0),
-                    2
-                )
+        gender_preds = np.asarray(outputs[0]).reshape(-1)
+        age_preds = np.asarray(outputs[1]).reshape(-1)
 
-                # Background for label
-                cv2.rectangle(
-                    img,
-                    (x1, max(0, y1 - 55)),
-                    (x2, y1),
-                    (0, 0, 0),
-                    -1
-                )
+        results = []
 
-                # Prediction
-                cv2.putText(
-                    img,
-                    label,
-                    (x1 + 5, y1 - 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65,
-                    (0, 255, 0),
-                    2
-                )
+        for box, g, a in zip(boxes, gender_preds, age_preds):
 
-                # Confidence
-                cv2.putText(
-                    img,
-                    confidence_label,
-                    (x1 + 5, y1 - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 255),
-                    1
-                )
+            g = float(g)
 
-            except Exception:
-                continue
+            gender = "Female" if g >= GENDER_THRESHOLD else "Male"
+            age = int(round(float(a)))
+            confidence = g if g >= 0.5 else 1 - g
+
+            results.append((box, gender, age, confidence))
+
+        with self._lock:
+
+            self._results = results
+            self.face_count = len(results)
+
+            # Stats panel shows the largest face
+            _, self.gender, self.age, self.confidence = results[0]
+
+    # --------------------------------------------------------
+    # Fast video path: just draw cached results
+    # --------------------------------------------------------
+
+    def recv(self, frame):
+
+        img = frame.to_ndarray(format="bgr24")
+
+        with self._lock:
+            self._latest_frame = img.copy()
+            results = list(self._results)
+
+        for (x1, y1, x2, y2), gender, age, confidence in results:
+
+            label = f"{gender} | Age: {age}"
+            confidence_label = f"{confidence * 100:.1f}%"
+
+            cv2.rectangle(
+                img,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),
+                2
+            )
+
+            cv2.rectangle(
+                img,
+                (x1, max(0, y1 - 55)),
+                (x2, y1),
+                (0, 0, 0),
+                -1
+            )
+
+            cv2.putText(
+                img,
+                label,
+                (x1 + 5, y1 - 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (0, 255, 0),
+                2
+            )
+
+            cv2.putText(
+                img,
+                confidence_label,
+                (x1 + 5, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1
+            )
 
         return frame.from_ndarray(img, format="bgr24")
 
@@ -445,7 +556,11 @@ if page == "Live Analysis":
             video_processor_factory=VisionAIProcessor,
             rtc_configuration=rtc_configuration,
             media_stream_constraints={
-                "video": True,
+                "video": {
+                    "width": {"ideal": 640},
+                    "height": {"ideal": 480},
+                    "frameRate": {"ideal": 15}
+                },
                 "audio": False
             },
             async_processing=True
