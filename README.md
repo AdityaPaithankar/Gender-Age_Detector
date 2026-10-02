@@ -101,9 +101,6 @@ Gender Detector/
 ├── notebooks/
 │   └── training.ipynb
 │
-├── src/
-│   ├── __init__.py
-│   └── inference.py
 │
 ├── assets/
 │
