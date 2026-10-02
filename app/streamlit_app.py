@@ -192,9 +192,9 @@ def predict_face(model, face):
 
     # Gender
     if gender_pred >= GENDER_THRESHOLD:
-        gender = "Male"
-    else:
         gender = "Female"
+    else:
+        gender = "Male"
 
     # Age
     age = int(
